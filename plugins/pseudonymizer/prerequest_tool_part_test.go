@@ -284,6 +284,37 @@ func TestAnonymizeToolPart_PropagatesAnonymizerFailure(t *testing.T) {
 	}
 }
 
+func TestIsToolPart_RecognizesEveryCallAndResultShape(t *testing.T) {
+	for _, partType := range []string{
+		"tool_use", "tool_result",
+		"server_tool_use", "mcp_tool_use",
+		"web_search_tool_result", "code_execution_tool_result",
+		"bash_code_execution_tool_result", "mcp_tool_result",
+	} {
+		if !isToolPart(partType) {
+			t.Errorf("isToolPart(%q) = false, want true", partType)
+		}
+	}
+	for _, partType := range []string{"text", "document", "thinking", "redacted_thinking", ""} {
+		if isToolPart(partType) {
+			t.Errorf("isToolPart(%q) = true, want false", partType)
+		}
+	}
+}
+
+func TestIsUnrewritableThinkingPart(t *testing.T) {
+	for _, partType := range []string{"thinking", "redacted_thinking"} {
+		if !isUnrewritableThinkingPart(partType) {
+			t.Errorf("isUnrewritableThinkingPart(%q) = false, want true", partType)
+		}
+	}
+	for _, partType := range []string{"text", "tool_use", "tool_result", ""} {
+		if isUnrewritableThinkingPart(partType) {
+			t.Errorf("isUnrewritableThinkingPart(%q) = true, want false", partType)
+		}
+	}
+}
+
 func TestRewriteLeaves_KeepsShapeAndKeys(t *testing.T) {
 	upper := func(s string) (string, error) { return strings.ToUpper(s), nil }
 
