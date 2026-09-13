@@ -261,19 +261,46 @@ func (p *Plugin) PreRequest(ctx context.Context, in *proto.PreRequestInput) (*pr
 		leakEntities   int
 	)
 
+	// detectKept expose la détection en lecture seule sur laquelle s'appuient les
+	// chemins qui transmettent un contenu sans le réécrire.
+	detectKept := func(text string) ([]ner.Entity, error) {
+		entities, err := anon.Detect(text)
+		if err != nil {
+			return nil, err
+		}
+		return keepDetectedTypes(entities, cfg.SkipTypes), nil
+	}
+
 	// detectLeak scanne en lecture seule un contenu qui ne sera pas réécrit et
 	// compte ce qu'il trouve, sans jamais toucher session.Mapping.
 	detectLeak := func(text string) {
 		if text == "" {
 			return
 		}
-		entities, err := anon.Detect(text)
+		entities, err := detectKept(text)
 		if err != nil {
 			slog.WarnContext(ctx, "pseudonymizer: failed to scan unpseudonymized content", slog.Any("error", err))
 			return
 		}
 		countEntities(leakTypeCounts, entities)
 		leakEntities += len(entities)
+	}
+
+	// detectLeakIn fait le même travail sur une forme entière, quelle qu'elle
+	// soit. Le total partiel est crédité même en cas d'erreur : detectLeaves a
+	// déjà inscrit dans leakTypeCounts ce qu'il avait trouvé avant d'échouer, et
+	// le jeter laisserait leak_types nommer des types que leak_entities ne
+	// compte pas — voire aucun événement du tout si ce scan était la seule
+	// source de fuite.
+	detectLeakIn := func(v any, partType string) {
+		n, err := detectLeaves(v, detectKept, leakTypeCounts)
+		leakEntities += n
+		if err != nil {
+			slog.WarnContext(ctx, "pseudonymizer: failed to scan unpseudonymized part",
+				slog.String("type", partType),
+				slog.Any("error", err),
+			)
+		}
 	}
 
 	// anonymizeText is the one entry point to the anonymizer for this request:
@@ -344,7 +371,12 @@ func (p *Plugin) PreRequest(ctx context.Context, in *proto.PreRequestInput) (*pr
 				}
 				partType, _ := partMap["type"].(string)
 				switch {
-				case partType == "text":
+				case partType == partTypeText || partType == partTypeInputText:
+					// Both spellings carry the text in a `text` field: "text" on
+					// the Messages and Chat Completions routes, "input_text" on
+					// OpenAI Responses. Matching only the first left Responses
+					// traffic to the catch-all, forwarded in clear when it is
+					// plainly rewritable.
 					text, _ := partMap["text"].(string)
 					result, err := anon.Anonymize(text, append(anonymOpts, anonymizer.WithSession(session))...)
 					if err != nil {
@@ -393,14 +425,36 @@ func (p *Plugin) PreRequest(ctx context.Context, in *proto.PreRequestInput) (*pr
 					// encrypted_content alone. server_tool_use is part of that
 					// same turn, so its query is left unrewritten too rather
 					// than risk the same 400 the web_search_tool_result
-					// passthrough above exists to avoid. Still scanned
+					// passthrough below exists to avoid. Still scanned
 					// read-only for visibility, same as thinking.
+					//
+					// Read as search-specific, on documentation wording alone:
+					// if the constraint turns out to be turn-level, rewriting a
+					// code_execution server_tool_use input or a
+					// bash_code_execution_tool_result's stdout reopens the same
+					// 400 on those turns. That needs a live test against the
+					// provider to settle, not another reading of the docs.
 					if input, ok := partMap["input"].(map[string]any); ok {
 						query, _ := input["query"].(string)
 						detectLeak(query)
 					}
 					slog.DebugContext(ctx, "pseudonymizer: web_search server_tool_use left untouched",
 						slog.String("role", role),
+					)
+					kept = append(kept, part)
+
+				case passthroughToolParts[partType]:
+					// Recognized as a tool block — so never routed to the
+					// attachment path — but forwarded byte for byte instead of
+					// rewritten. Handled here rather than inside
+					// anonymizeToolPart, which only ever gets an `anonymize`
+					// closure and has no way to scan: every other clear-text
+					// path reports what it forwarded, and this one was the last
+					// that did not.
+					detectLeakIn(partMap, partType)
+					slog.DebugContext(ctx, "pseudonymizer: passthrough tool block left untouched",
+						slog.String("role", role),
+						slog.String("type", partType),
 					)
 					kept = append(kept, part)
 
@@ -502,14 +556,7 @@ func (p *Plugin) PreRequest(ctx context.Context, in *proto.PreRequestInput) (*pr
 					// text_editor_code_execution_tool_result's file content), and
 					// an operator on the "block" policy must not read the silence
 					// as "nothing got through" when something did.
-					if n, err := detectLeaves(partMap, anon.Detect, leakTypeCounts); err != nil {
-						slog.WarnContext(ctx, "pseudonymizer: failed to scan unrecognized part",
-							slog.String("type", partType),
-							slog.Any("error", err),
-						)
-					} else {
-						leakEntities += n
-					}
+					detectLeakIn(partMap, partType)
 					slog.DebugContext(ctx, "pseudonymizer: unrecognized part type left untouched",
 						slog.String("role", role),
 						slog.String("type", partType),

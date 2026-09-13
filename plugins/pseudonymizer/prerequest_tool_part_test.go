@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/bornholm/go-anon/pkg/ner"
 )
 
 const toolPartSecret = "sophie.guerin@exemple.fr"
@@ -299,6 +301,28 @@ func TestIsToolPart_RecognizesEveryCallAndResultShape(t *testing.T) {
 		if isToolPart(partType) {
 			t.Errorf("isToolPart(%q) = true, want false", partType)
 		}
+	}
+}
+
+// Detect returns the recognizer's raw output where Anonymize filters on
+// EntityTypes first, so the read-only path has to reapply skip_types itself —
+// otherwise a type the operator disabled is absent from `types` and present in
+// `leak_types`, and the two counters stop measuring the same set.
+func TestKeepDetectedTypes_DropsSkippedTypes(t *testing.T) {
+	entities := []ner.Entity{{Type: "EMAIL"}, {Type: "PER"}, {Type: "EMAIL"}, {Type: "LOC"}}
+
+	kept := keepDetectedTypes(entities, []string{"EMAIL"})
+	if len(kept) != 2 {
+		t.Fatalf("len(kept) = %d, want 2: both EMAIL entities dropped", len(kept))
+	}
+	for _, e := range kept {
+		if e.Type == "EMAIL" {
+			t.Errorf("a skipped type survived the filter: %#v", kept)
+		}
+	}
+
+	if got := keepDetectedTypes(entities, nil); len(got) != len(entities) {
+		t.Errorf("no skip_types configured should keep everything, got %d of %d", len(got), len(entities))
 	}
 }
 

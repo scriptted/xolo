@@ -167,9 +167,10 @@ func TestPreRequest_MCPToolUseArgumentsArePseudonymized(t *testing.T) {
 // A web_search_tool_result's `content` is a list of `web_search_result`
 // blocks — title, url, page_age, and an encrypted_content the API requires
 // back byte for byte on the next turn, the same provider-signature contract
-// as `thinking` — never `text` blocks. There is no field here safe to
-// pseudonymize without risking that signature, so the whole block is
-// forwarded untouched, same answer as for a thinking block.
+// as `thinking` — never `text` blocks. The documentation asks for the
+// assistant's content blocks to round-trip as a whole, so even `title`, which
+// is free text, is forwarded rather than singled out for rewriting — and, as
+// for every other clear-text path, the leak is reported rather than silent.
 func TestPreRequest_WebSearchToolResultIsLeftUntouched(t *testing.T) {
 	cfg := attachmentConfig(t)
 	block := map[string]any{
@@ -179,7 +180,7 @@ func TestPreRequest_WebSearchToolResultIsLeftUntouched(t *testing.T) {
 		"encrypted_content": "EnCrYpTeD-signed-payload==",
 		"page_age":          "3 days ago",
 	}
-	out := preRequestWithParts(t, cfg, []any{
+	out, host := preRequestPartsWithHost(t, cfg, []any{
 		map[string]any{
 			"type":        "web_search_tool_result",
 			"tool_use_id": "srvtoolu_2",
@@ -207,6 +208,17 @@ func TestPreRequest_WebSearchToolResultIsLeftUntouched(t *testing.T) {
 	}
 	if got["title"] != block["title"] {
 		t.Errorf("block was rewritten instead of forwarded as is: %#v", got)
+	}
+
+	// THE ASSERTION WHOSE ABSENCE LET THE SILENT PASSTHROUGH THROUGH. The
+	// secret sits in `title` and survives on purpose; what must not survive is
+	// the operator having no way to know it did.
+	evt := host.waitForEvent(t)
+	if evt.Type != "sensitive-data.detected" {
+		t.Fatalf("event type = %q, want sensitive-data.detected (the leak went unreported)", evt.Type)
+	}
+	if evt.Attributes["leak_entities"] == "0" || evt.Attributes["leak_entities"] == "" {
+		t.Errorf("leak_entities = %q, want a non-zero count", evt.Attributes["leak_entities"])
 	}
 }
 
@@ -459,6 +471,30 @@ func TestPreRequest_PseudonymizedAndLeakedEntitiesAreCountedSeparately(t *testin
 	}
 	if !strings.Contains(evt.Message, "pseudonymisée") || !strings.Contains(evt.Message, "clair") {
 		t.Errorf("message should mention both the pseudonymized and the leaked count, got %q", evt.Message)
+	}
+}
+
+// An OpenAI Responses text part spells its type "input_text" and carries the
+// text in the same `text` field. Matching only "text" left that traffic to the
+// catch-all, forwarded in clear when it is plainly rewritable.
+func TestPreRequest_InputTextPartIsPseudonymized(t *testing.T) {
+	cfg := attachmentConfig(t)
+	out := preRequestWithParts(t, cfg, []any{
+		map[string]any{"type": "input_text", "text": "contact : " + agentBlockSecret},
+	})
+
+	if !out.Allowed {
+		t.Fatalf("request refused: %s", out.RejectionReason)
+	}
+	if strings.Contains(out.ModifiedMessagesJson, agentBlockSecret) {
+		t.Errorf("an input_text part was forwarded unpseudonymized: %s", out.ModifiedMessagesJson)
+	}
+	part := toolResultPart(t, userMessageParts(t, out))
+	if part["type"] != "input_text" {
+		t.Errorf("part type changed: %#v", part["type"])
+	}
+	if text, _ := part["text"].(string); !strings.Contains(text, "contact :") {
+		t.Errorf("the part lost its text: %q", text)
 	}
 }
 

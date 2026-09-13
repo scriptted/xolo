@@ -9,6 +9,12 @@ import (
 )
 
 const (
+	// partTypeText is how the Messages and Chat Completions routes name a text
+	// part; partTypeInputText is the OpenAI Responses spelling of the same
+	// thing, carrying its text in the same `text` field.
+	partTypeText      = "text"
+	partTypeInputText = "input_text"
+
 	partTypeToolUse    = "tool_use"
 	partTypeToolResult = "tool_result"
 
@@ -55,11 +61,22 @@ var resultShapedToolParts = map[string]bool{
 }
 
 // passthroughToolParts are agent tool blocks recognized as such — so
-// isToolPart is true and they never reach the attachment path — but whose
-// content is forwarded unmodified instead of rewritten. Kept apart from
-// resultShapedToolParts so that map's own members are exactly the ones that
-// take the "content" rewrite path below; a member here has its own
-// short-circuiting case above that one instead.
+// isToolPart is true and they never reach the attachment path — but forwarded
+// byte for byte instead of rewritten.
+//
+// web_search_tool_result's content is a list of `web_search_result` blocks —
+// url, title, page_age, and an encrypted_content the API requires back
+// unchanged on the next turn, the same provider-signature contract as
+// encrypted `thinking` — or, on failure, a
+// {"type":"web_search_tool_result_error",...} object. Neither shape is a
+// `text` block, and the documentation asks for the assistant's content blocks
+// to round-trip as a whole rather than field by field, so even `title`, which
+// is free text, is not singled out for rewriting.
+//
+// PreRequest owns these: it intercepts them before anonymizeToolPart, which
+// has no way to scan what it forwards. They are listed apart from
+// resultShapedToolParts so that map's members are exactly the ones that take
+// the "content" rewrite path.
 var passthroughToolParts = map[string]bool{
 	partTypeWebSearchToolResult: true,
 }
@@ -143,19 +160,6 @@ func anonymizeToolPart(part map[string]any, anonymize func(string) (string, erro
 			return nil, err
 		}
 		updated["input"] = walked
-		return updated, nil
-
-	case passthroughToolParts[partType]:
-		// content is a list of `web_search_result` blocks — url, title,
-		// page_age, and an encrypted_content the API requires back byte for
-		// byte on the next turn, the same provider-signature contract as
-		// encrypted `thinking` — or, on failure, a
-		// {"type":"web_search_tool_result_error",...} object. Neither shape
-		// is a `text` block, and none of it is ours to rewrite: routing it
-		// through the generic switch below would hit the "not text" branch
-		// of anonymizeToolResultBlock and replace the whole result,
-		// encrypted_content included, with nonTextToolPayloadNotice. Passed
-		// through unmodified instead, like a thinking block.
 		return updated, nil
 
 	case resultShapedToolParts[partType]:
@@ -287,6 +291,32 @@ func rewriteLeaves(v any, rewrite func(string) (string, error)) (any, error) {
 	default:
 		return v, nil
 	}
+}
+
+// keepDetectedTypes drops from a Detect result the entity types the operator
+// disabled through `skip_types`.
+//
+// Detect does not do this itself: it returns the recognizer's raw output,
+// where Anonymize first filters on the EntityTypes the node fills in from
+// `skip_types`. Without the same filter on the read-only path, a disabled type
+// would be absent from `types` and present in `leak_types`, and the two
+// counters — which the event presents side by side — would be measuring
+// different sets.
+func keepDetectedTypes(entities []ner.Entity, skipTypes []string) []ner.Entity {
+	if len(skipTypes) == 0 || len(entities) == 0 {
+		return entities
+	}
+	skipped := make(map[string]bool, len(skipTypes))
+	for _, t := range skipTypes {
+		skipped[t] = true
+	}
+	kept := make([]ner.Entity, 0, len(entities))
+	for _, e := range entities {
+		if !skipped[string(e.Type)] {
+			kept = append(kept, e)
+		}
+	}
+	return kept
 }
 
 // detectLeaves walks a decoded JSON value read-only, running detect over
