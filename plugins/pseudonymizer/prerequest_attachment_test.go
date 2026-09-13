@@ -249,6 +249,48 @@ func TestPreRequest_AttachmentDisabledFallsBackToThePolicy(t *testing.T) {
 	}
 }
 
+// A part type the plugin does not recognize used to fall to the same default
+// as an attachment — read as a file, found to carry no inline bytes, and
+// refused or stripped. It carries no more inline bytes now than before, but
+// isAttachmentPart no longer claims it, so it is forwarded untouched instead
+// of being treated as an unreadable file.
+func TestPreRequest_UnrecognizedPartTypeIsLeftUntouched(t *testing.T) {
+	cfg := attachmentConfig(t)
+	cfg.UnsupportedAttachments = "block"
+
+	out := preRequestWithParts(t, cfg, []any{
+		map[string]any{
+			"type":  "some_future_provider_block",
+			"value": "peu importe",
+		},
+	})
+
+	if !out.Allowed {
+		t.Fatalf("an unrecognized part type must never refuse the request, got: %s", out.RejectionReason)
+	}
+	parts := userMessageParts(t, out)
+	if len(parts) != 1 {
+		t.Fatalf("expected the part kept as is, got %#v", parts)
+	}
+	part, ok := parts[0].(map[string]any)
+	if !ok || part["type"] != "some_future_provider_block" || part["value"] != "peu importe" {
+		t.Errorf("part was altered instead of forwarded as is: %#v", parts[0])
+	}
+}
+
+func TestIsAttachmentPart(t *testing.T) {
+	for _, partType := range []string{"file", "input_file", "input_image", "image_url", "document", "image"} {
+		if !isAttachmentPart(partType) {
+			t.Errorf("isAttachmentPart(%q) = false, want true", partType)
+		}
+	}
+	for _, partType := range []string{"text", "tool_use", "tool_result", "thinking", "redacted_thinking", "some_future_provider_block", ""} {
+		if isAttachmentPart(partType) {
+			t.Errorf("isAttachmentPart(%q) = true, want false", partType)
+		}
+	}
+}
+
 func TestPreRequest_AttachmentSharesPseudonymsWithTheMessage(t *testing.T) {
 	cfg := attachmentConfig(t)
 

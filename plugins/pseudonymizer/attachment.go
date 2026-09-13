@@ -7,6 +7,32 @@ import (
 	"strings"
 )
 
+// attachmentPartTypes are the part types, across provider APIs, that carry a
+// file, image or document a human attached — as opposed to a tool block, a
+// thinking block, or any other part shape the plugin does not yet recognize.
+var attachmentPartTypes = map[string]struct{}{
+	"file":        {}, // OpenAI Chat Completions
+	"input_file":  {}, // OpenAI Responses
+	"input_image": {}, // OpenAI Responses
+	"image_url":   {}, // OpenAI Chat Completions
+	"document":    {}, // Anthropic
+	"image":       {}, // Anthropic
+}
+
+// isAttachmentPart reports whether a message part type names a file, image or
+// document a human attached.
+//
+// The attachment path used to catch everything text, a tool block or a
+// thinking block wasn't — so every part type a provider later introduced
+// (server_tool_use, web_search_tool_result…) fell through to it and got
+// refused or silently stripped as an unreadable file, the exact regression
+// this plugin exists to avoid. Naming the attachment shapes explicitly means
+// a part type nobody has classified yet is forwarded untouched instead.
+func isAttachmentPart(partType string) bool {
+	_, ok := attachmentPartTypes[partType]
+	return ok
+}
+
 // attachment is a content part carrying a file, normalized across the part
 // shapes the providers use (OpenAI file/input_file, Anthropic document…).
 type attachment struct {
