@@ -111,6 +111,7 @@ func (s *Store) ListPendingInvitesForEmail(ctx context.Context, tenantID model.T
 	}
 	var tokens []*InviteToken
 	now := time.Now()
+	email = model.NormalizeEmail(email)
 	err := s.withRetry(ctx, false, func(ctx context.Context, db *gorm.DB) error {
 		return errors.WithStack(db.Preload("Org").
 			Joins("JOIN organizations ON organizations.id = invite_tokens.org_id").

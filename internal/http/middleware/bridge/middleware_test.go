@@ -63,6 +63,12 @@ type callResult struct {
 // reports what the terminal handler saw.
 func call(t *testing.T, store *xologorm.Store, opts bridge.Options, identity *authn.User) callResult {
 	t.Helper()
+	return callWith(t, store, store, opts, identity)
+}
+
+// callWith is call with a distinct invite store, to inject lookup failures.
+func callWith(t *testing.T, store *xologorm.Store, inviteStore port.InviteStore, opts bridge.Options, identity *authn.User) callResult {
+	t.Helper()
 
 	result := callResult{emitter: &recordingEmitter{}}
 
@@ -71,7 +77,7 @@ func call(t *testing.T, store *xologorm.Store, opts bridge.Options, identity *au
 		result.user = httpCtx.User(r.Context())
 	})
 
-	handler := bridge.Middleware(store, store, result.emitter, opts)(terminal)
+	handler := bridge.Middleware(store, inviteStore, result.emitter, opts)(terminal)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -92,6 +98,15 @@ func call(t *testing.T, store *xologorm.Store, opts bridge.Options, identity *au
 	result.status = rec.Code
 
 	return result
+}
+
+// failingInviteStore answers every pending-invitation lookup with an error.
+type failingInviteStore struct {
+	port.InviteStore
+}
+
+func (failingInviteStore) ListPendingInvitesForEmail(context.Context, model.TenantID, string) ([]model.InviteToken, error) {
+	return nil, errors.New("database unavailable")
 }
 
 // inviteEmail creates an organization in the given tenant and a pending
@@ -299,6 +314,46 @@ func TestAutoCreateDisabled(t *testing.T) {
 		}
 	})
 
+	// The store filters on revocation and expiry only; an invitation whose uses
+	// are exhausted can no longer be accepted, so it provisions nothing.
+	t.Run("ignores an exhausted invitation", func(t *testing.T) {
+		store := newStore(t)
+
+		org := model.NewOrganization(testTenantID, "acme", "Acme", "")
+		if err := store.CreateOrg(ctx, org); err != nil {
+			t.Fatalf("create org: %v", err)
+		}
+		email, maxUses := "jean@corp.tld", 1
+		invite := model.NewInviteToken(org.ID(), model.RoleMember, &email, nil, &maxUses, model.NewUserID())
+		if err := store.CreateInvite(ctx, invite); err != nil {
+			t.Fatalf("create invite: %v", err)
+		}
+		if err := store.IncrementInviteUses(ctx, invite.ID()); err != nil {
+			t.Fatalf("increment invite uses: %v", err)
+		}
+
+		result := call(t, store, disabled, newIdentity("sub-1", "jean@corp.tld", "Jean"))
+
+		if result.served {
+			t.Error("the request should not have been served")
+		}
+	})
+
+	// A failed lookup falls back to the configured policy: it must neither
+	// grant the account nor turn into a 500.
+	t.Run("falls back to the policy when the invite lookup fails", func(t *testing.T) {
+		store := newStore(t)
+
+		result := callWith(t, store, failingInviteStore{store}, disabled, newIdentity("sub-1", "jean@corp.tld", "Jean"))
+
+		if result.served {
+			t.Error("the request should not have been served")
+		}
+		if result.status != http.StatusForbidden {
+			t.Errorf("status: got %d, want %d", result.status, http.StatusForbidden)
+		}
+	})
+
 	// An open link (no addressee) is not a per-identity grant: it must not act
 	// as a back door around AutoCreateUsers.
 	t.Run("ignores an untargeted invitation", func(t *testing.T) {
@@ -345,6 +400,23 @@ func TestAutoCreateDisabled(t *testing.T) {
 			t.Errorf("roles: got %v, want to contain %q", user.Roles(), authz.RoleAdmin)
 		}
 	})
+}
+
+// The bootstrap path of an empty instance: the configured spelling and the
+// provider's rarely agree on case.
+func TestDefaultAdminMatchesCaseInsensitively(t *testing.T) {
+	store := newStore(t)
+
+	opts := bridge.Options{AutoCreateUsers: false, DefaultAdmins: []string{" Boss@Corp.tld"}}
+
+	result := call(t, store, opts, newIdentity("sub-boss", "boss@corp.tld", "Boss"))
+
+	if !result.served {
+		t.Fatalf("request should have been served, got status %d", result.status)
+	}
+	if !slices.Contains(result.user.Roles(), authz.RoleAdmin) {
+		t.Errorf("roles: got %v, want to contain %q", result.user.Roles(), authz.RoleAdmin)
+	}
 }
 
 func TestExistingUserSynchronization(t *testing.T) {

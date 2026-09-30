@@ -290,11 +290,11 @@ func TestInvitationAcceptanceAndDecline(t *testing.T) {
 			require.Equal(t, 1, after.UsesCount())
 		})
 		// An address is the same recipient whatever its case: the invitation was
-		// sent to "Recipient@…" while the account stores "recipient@…".
+		// sent to "recipient@…" (stored normalized) while the account holds "RECIPIENT@…".
 		t.Run("recipient case is ignored", func(t *testing.T) {
 			f := newInvitationFixture(t, store)
 			inv := f.invite(t, true, "", nil, nil)
-			f.user.SetEmail(strings.ToLower(f.user.Email()))
+			f.user.SetEmail(strings.ToUpper(f.user.Email()))
 			require.NotEqual(t, *inv.InviteeEmail(), f.user.Email())
 			require.NoError(t, store.SaveUser(f.ctx, f.user))
 			pending, err := store.ListPendingInvitesForEmail(f.ctx, f.tenant.ID(), f.user.Email())
