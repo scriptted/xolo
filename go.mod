@@ -168,4 +168,4 @@ require (
 // third-party plugin authors depend only on it, not on the whole server.
 replace github.com/xolo-gateway/xolo/pkg/pluginsdk => ./pkg/pluginsdk
 
-replace github.com/bornholm/genai => github.com/scriptted/genai v0.35.1-0.20261001123204-a172af6aa50b
+replace github.com/bornholm/genai => github.com/scriptted/genai v0.35.1-0.20261002064959-4a8432fa5204
