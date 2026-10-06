@@ -46,11 +46,13 @@ Liez le convite à une adresse email. Seule la personne avec cet email pourra l'
 
 Le destinataire n'a pas besoin de posséder déjà un compte Xolo : une invitation ciblée en attente vaut pré-provisionnement, et le compte se crée à sa première connexion même lorsque `XOLO_HTTP_AUTHN_AUTO_CREATE_USERS` vaut `false`. Une invitation **ouverte** n'accorde pas cette dispense — elle ne nomme personne.
 
-L'activation du compte, elle, reste réglée par `XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT`. Un destinataire dont le compte est encore inactif accepte malgré tout son invitation — il obtient son adhésion et son rôle immédiatement — mais le reste de l'instance lui répond « compte désactivé » jusqu'à ce qu'un administrateur l'active depuis `/admin/users`. Il peut aussi bien la décliner.
+L'activation du compte, elle, reste réglée par `XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT`. Un destinataire dont le compte est encore inactif peut malgré tout consulter, accepter ou décliner, depuis le lien reçu, une invitation ciblée qui lui est adressée. S'il l'accepte, il obtient son adhésion et son rôle immédiatement, mais le reste de l'instance lui indique que son compte est inactif jusqu'à ce qu'un administrateur l'active depuis `/admin/users`. Après un refus, il arrive sur cette même page. Une invitation **ouverte**, elle, exige un compte actif.
+
+Xolo ne distingue pas un compte jamais activé d'un compte qu'un administrateur a désactivé : ce dernier peut lui aussi accepter une invitation ciblée qui lui est adressée. L'adhésion obtenue ne sert à rien tant que le compte reste inactif, mais elle prend effet dès sa réactivation. Révoquez les invitations en attente d'une personne dont vous désactivez le compte.
 
 Une invitation ne vaut que dans le tenant de l'organisation qui l'a émise : elle n'apparaît pas, ne s'accepte pas et ne pré-provisionne rien depuis un autre tenant.
 
-**L'adresse email vient du fournisseur d'identité.** Comme pour `XOLO_HTTP_AUTHN_DEFAULT_ADMINS`, Xolo se fie à l'adresse email que renvoie le fournisseur d'identité. Sur une instance qui expose plusieurs fournisseurs avec `XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT=true`, quiconque obtient auprès de l'un d'eux une identité portant l'adresse invitée rejoint l'organisation sans avoir reçu le lien. N'activez que des fournisseurs qui vérifient les adresses qu'ils certifient.
+**L'adresse email vient du fournisseur d'identité.** Comme pour `XOLO_HTTP_AUTHN_DEFAULT_ADMINS`, Xolo se fie à l'adresse email que renvoie le fournisseur d'identité. Sur une instance qui expose plusieurs fournisseurs, quiconque obtient auprès de l'un d'eux une identité portant l'adresse invitée peut accepter l'invitation et devenir membre de l'organisation. Avec `XOLO_HTTP_AUTHN_ACTIVE_BY_DEFAULT=true`, il n'a même pas besoin du lien : l'invitation lui apparaît dans son espace. Avec `false`, il lui faut le lien, et son compte reste inutilisable tant qu'un administrateur ne l'a pas activé, mais son adhésion est acquise. N'activez que des fournisseurs qui vérifient les adresses qu'ils certifient.
 
 ### Invitation ouverte
 

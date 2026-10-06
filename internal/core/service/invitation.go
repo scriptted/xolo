@@ -58,6 +58,8 @@ func (s *InvitationService) Prepare(ctx context.Context, tenantID model.TenantID
 	return result, nil
 }
 
+// invitationUser loads the acting user inside the tenant. It does not assert
+// that the account is active: each caller decides whether that is required.
 func invitationUser(ctx context.Context, tx port.InvitationTx, tenantID model.TenantID, userID model.UserID) (model.User, error) {
 	if userID == "" || tenantID == "" {
 		return nil, port.ErrNotFound
@@ -68,9 +70,6 @@ func invitationUser(ctx context.Context, tx port.InvitationTx, tenantID model.Te
 	}
 	if user.TenantID() != tenantID {
 		return nil, port.ErrNotFound
-	}
-	if !user.Active() {
-		return nil, port.ErrNotAllowed
 	}
 	return user, nil
 }
@@ -88,8 +87,19 @@ func prepareInvitation(ctx context.Context, tx port.InvitationTx, tenantID model
 		if err != nil {
 			return nil, err
 		}
-		if email := invite.InviteeEmail(); email != nil && !strings.EqualFold(*email, user.Email()) {
+		email := invite.InviteeEmail()
+		if email != nil && !strings.EqualFold(*email, user.Email()) {
 			return nil, port.ErrNotFound
+		}
+		// The recipient of a targeted invitation may act on it while inactive:
+		// with AUTO_CREATE_USERS=false the invitation is why the account exists,
+		// and ACTIVE_BY_DEFAULT=false leaves it inactive until an administrator
+		// steps in. An open invitation names nobody and keeps requiring an
+		// active account. A deactivated account is not told apart from one never
+		// activated: what it joins only takes effect once an administrator
+		// reactivates it.
+		if email == nil && !user.Active() {
+			return nil, port.ErrNotAllowed
 		}
 	}
 	if !org.Active() || !model.IsInviteValid(invite) || (invite.InviteeEmail() != nil && invite.UsesCount() > 0) {
@@ -151,8 +161,12 @@ func (s *InvitationService) Create(ctx context.Context, tenantID model.TenantID,
 		if tenantID == "" || org.TenantID() != tenantID {
 			return port.ErrNotFound
 		}
-		if _, err := invitationUser(ctx, tx, tenantID, actorID); err != nil {
+		actor, err := invitationUser(ctx, tx, tenantID, actorID)
+		if err != nil {
 			return err
+		}
+		if !actor.Active() {
+			return port.ErrNotAllowed
 		}
 		if !org.Active() {
 			return port.ErrInvalid

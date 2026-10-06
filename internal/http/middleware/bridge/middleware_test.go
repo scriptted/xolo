@@ -101,6 +101,8 @@ func callWith(t *testing.T, store *xologorm.Store, inviteStore port.InviteStore,
 }
 
 // failingInviteStore answers every pending-invitation lookup with an error.
+// The embedded store stays nil: any other call the bridge makes panics instead
+// of silently reaching a database.
 type failingInviteStore struct {
 	port.InviteStore
 }
@@ -248,9 +250,9 @@ func TestAutoCreateDisabled(t *testing.T) {
 		}
 	})
 
-	// The invitation grants the account, not its activation. /join/{token} is
-	// the one route that does not assert authz.Active(), so the invitee still
-	// accepts and gets the membership; the rest waits for an administrator.
+	// The invitation grants the account, not its activation. That the inactive
+	// invitee can still see, accept and decline the invitation is asserted end
+	// to end by TestInvitationHTTPInactiveInvitee (internal/adapter/gorm).
 	t.Run("leaves the activation of an invited identity to ActiveByDefault", func(t *testing.T) {
 		store := newStore(t)
 
@@ -344,7 +346,7 @@ func TestAutoCreateDisabled(t *testing.T) {
 	t.Run("falls back to the policy when the invite lookup fails", func(t *testing.T) {
 		store := newStore(t)
 
-		result := callWith(t, store, failingInviteStore{store}, disabled, newIdentity("sub-1", "jean@corp.tld", "Jean"))
+		result := callWith(t, store, failingInviteStore{}, disabled, newIdentity("sub-1", "jean@corp.tld", "Jean"))
 
 		if result.served {
 			t.Error("the request should not have been served")

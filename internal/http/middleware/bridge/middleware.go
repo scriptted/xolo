@@ -110,11 +110,11 @@ func Middleware(userStore port.UserStore, inviteStore port.InviteStore, emitter 
 
 				// An invitation grants the account, not its activation:
 				// ActiveByDefault keeps deciding that, as it does for any other
-				// identity. Nothing is lost by waiting — /join/{token} is the one
-				// route that does not assert authz.Active(), so an invitee whose
-				// account is still inactive accepts the invitation and gets the
-				// membership and role right away; only the rest of the instance
-				// waits for an administrator.
+				// identity. Nothing is lost by waiting: the join and decline routes
+				// do not assert authz.Active(), and the invitation service lets the
+				// recipient of a targeted invitation act on it while inactive, so the
+				// invitee gets the membership and role right away; only the rest of
+				// the instance waits for an administrator.
 				user = model.NewUser(
 					tenant.ID(),
 					authnUser.Provider, authnUser.Subject, authnUser.Email, authnUser.DisplayName,
@@ -209,7 +209,7 @@ func hasPendingInvite(ctx context.Context, inviteStore port.InviteStore, tenantI
 		return false
 	}
 
-	// The store filters on revocation and expiry only; IsInviteValid also
-	// rejects an invitation whose uses are exhausted.
+	// The store already excludes revoked, expired and consumed invitations;
+	// IsInviteValid repeats the domain rule rather than relying on the query.
 	return slices.ContainsFunc(invites, model.IsInviteValid)
 }

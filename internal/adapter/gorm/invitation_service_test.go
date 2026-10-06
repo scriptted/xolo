@@ -95,7 +95,7 @@ func TestInvitationValidation(t *testing.T) {
 		}{
 			{"foreign tenant same slug", port.ErrNotFound}, {"foreign user", port.ErrNotFound},
 			{"wrong recipient", port.ErrNotFound},
-			{"inactive user", port.ErrNotAllowed}, {"inactive organization", port.ErrInvalid},
+			{"inactive user, open invitation", port.ErrNotAllowed}, {"inactive organization", port.ErrInvalid},
 			{"foreign role", port.ErrInvalid}, {"deleted role", port.ErrInvalid},
 			{"unknown role", port.ErrInvalid}, {"missing builtin", port.ErrInvalid},
 			{"expired", port.ErrInvalid}, {"revoked", port.ErrInvalid}, {"exhausted", port.ErrInvalid},
@@ -116,7 +116,7 @@ func TestInvitationValidation(t *testing.T) {
 					user = f.foreignUser.ID()
 				case "wrong recipient":
 					user = f.other.ID()
-				case "inactive user":
+				case "inactive user, open invitation":
 					f.user.SetActive(false)
 					require.NoError(t, store.SaveUser(f.ctx, f.user))
 				case "inactive organization":
@@ -142,7 +142,10 @@ func TestInvitationValidation(t *testing.T) {
 				case "empty tenant":
 					tenant = ""
 				}
-				inv := f.invite(t, true, role, expires, limit)
+				// The recipient of a targeted invitation may act on it while
+				// inactive (TestInvitationHTTPInactiveInvitee); an open one names
+				// nobody and still requires an active account.
+				inv := f.invite(t, tc.name != "inactive user, open invitation", role, expires, limit)
 				id := inv.ID()
 				switch tc.name {
 				case "revoked":
