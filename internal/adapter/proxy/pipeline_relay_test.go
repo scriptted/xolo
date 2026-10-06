@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -150,16 +151,19 @@ func TestPipelineWrappedClient_SupportsMessagesRelay_FollowsInner(t *testing.T) 
 	}
 }
 
-// countingRewriter is rewriteExecutor counting its backward passes.
+// countingRewriter is rewriteExecutor counting its backward passes and
+// recording whether the last one was told the response had an error.
 type countingRewriter struct {
 	rewriteExecutor
-	mu     sync.Mutex
-	passes int
+	mu       sync.Mutex
+	passes   int
+	hadError bool
 }
 
 func (e *countingRewriter) Backward(ctx context.Context, in pipeline.BackwardInput) (*pipeline.BackwardResult, error) {
 	e.mu.Lock()
 	e.passes++
+	e.hadError = in.HadError
 	e.mu.Unlock()
 	return e.rewriteExecutor.Backward(ctx, in)
 }
@@ -168,6 +172,31 @@ func (e *countingRewriter) count() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.passes
+}
+
+func (e *countingRewriter) sawError() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.hadError
+}
+
+// relayedTexts is the text of each content block of relayed events, by index.
+func relayedTexts(events []string) map[int]string {
+	texts := map[int]string{}
+	for _, event := range events {
+		parsed := parseRelayedEvent([]byte(event))
+		texts[parsed.Index] += parsed.Delta.Text
+	}
+	return texts
+}
+
+// eventTypes is the type of each relayed event, in order.
+func eventTypes(events []string) []string {
+	types := make([]string, len(events))
+	for i, event := range events {
+		types[i] = parseRelayedEvent([]byte(event)).Type
+	}
+	return types
 }
 
 func newCountingRelay(events []string) (*PipelineWrappedClient, *countingRewriter) {
@@ -201,12 +230,10 @@ func TestPipelineWrappedClient_RelayMessages_RestoresEachTextBlockInPlace(t *tes
 	}
 	got := relayedEvents(t, ch)
 
-	texts := map[int]string{}
+	texts := relayedTexts(got)
 	var serverInput string
 	for _, event := range got {
-		parsed := parseRelayedEvent([]byte(event))
-		texts[parsed.Index] += parsed.Delta.Text
-		if parsed.Index == 1 {
+		if parsed := parseRelayedEvent([]byte(event)); parsed.Index == 1 {
 			serverInput += parsed.Delta.PartialJSON
 		}
 	}
@@ -222,34 +249,67 @@ func TestPipelineWrappedClient_RelayMessages_RestoresEachTextBlockInPlace(t *tes
 }
 
 func TestPipelineWrappedClient_RelayMessages_BackwardPassRunsOnce(t *testing.T) {
-	cases := map[string][]string{
+	cases := map[string]struct {
+		events   []string
+		text     string
+		hadError bool
+	}{
 		"error before any content": {
-			sse("message_start", `{"type":"message_start","message":{"id":"msg_1"}}`),
-			sse("error", `{"type":"error","error":{"type":"overloaded_error"}}`),
+			events: []string{
+				sse("message_start", `{"type":"message_start","message":{"id":"msg_1"}}`),
+				sse("error", `{"type":"error","error":{"type":"overloaded_error"}}`),
+			},
+			hadError: true,
 		},
 		"unknown event amid the content": {
-			sse("message_start", `{"type":"message_start","message":{"id":"msg_1"}}`),
-			sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
-			sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi PERSON_1"}}`),
-			sse("future_event", `{"type":"future_event"}`),
-			sse("content_block_stop", `{"type":"content_block_stop","index":0}`),
-			sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`),
-			sse("message_stop", `{"type":"message_stop"}`),
+			events: []string{
+				sse("message_start", `{"type":"message_start","message":{"id":"msg_1"}}`),
+				sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+				sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi PERSON_1"}}`),
+				sse("future_event", `{"type":"future_event"}`),
+				sse("content_block_stop", `{"type":"content_block_stop","index":0}`),
+				sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`),
+				sse("message_stop", `{"type":"message_stop"}`),
+			},
+			text: "Hi Alice",
+		},
+		// The upstream drops the connection mid text block: no
+		// content_block_stop, message_delta, message_stop nor error. Only the
+		// fallback once the source closes delivers what was held back.
+		"upstream closes mid text block": {
+			events: []string{
+				sse("message_start", `{"type":"message_start","message":{"id":"msg_1"}}`),
+				sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+				sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi PER"}}`),
+				sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SON_1, here"}}`),
+			},
+			text:     "Hi Alice, here",
+			hadError: true,
 		},
 	}
-	for name, events := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			wrapped, rewriter := newCountingRelay(events)
+			wrapped, rewriter := newCountingRelay(tc.events)
 			ch, err := wrapped.RelayMessages(context.Background(), nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			got := relayedEvents(t, ch)
-			if len(got) != len(events) {
-				t.Errorf("events = %d, want %d", len(got), len(events))
-			}
 			if rewriter.count() != 1 {
 				t.Errorf("backward passes = %d, want 1", rewriter.count())
+			}
+			if rewriter.sawError() != tc.hadError {
+				t.Errorf("backward pass hadError = %v, want %v", rewriter.sawError(), tc.hadError)
+			}
+			if text := relayedTexts(got)[0]; text != tc.text {
+				t.Errorf("text = %q, want %q", text, tc.text)
+			}
+			// The restored text keeps its place among the other events. A
+			// text block's extra deltas are dropped, its restored text riding
+			// on the first one, so they are left out of the comparison.
+			want := slices.Compact(eventTypes(tc.events))
+			if gotTypes := slices.Compact(eventTypes(got)); !slices.Equal(gotTypes, want) {
+				t.Errorf("event order = %v, want %v", gotTypes, want)
 			}
 		})
 	}
