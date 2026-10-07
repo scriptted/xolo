@@ -292,12 +292,25 @@ func TestInvitationAcceptanceAndDecline(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, after.UsesCount())
 		})
+		t.Run("blank target matches nobody", func(t *testing.T) {
+			f := newInvitationFixture(t, store)
+			inv := model.NewInviteToken(f.org.ID(), string(f.role.ID()), ptr(" "), nil, nil, f.other.ID())
+			require.NoError(t, store.CreateInvite(f.ctx, inv))
+			f.other.SetEmail("")
+			require.NoError(t, store.SaveUser(f.ctx, f.other))
+			for _, user := range []model.UserID{f.user.ID(), f.other.ID()} {
+				_, err := f.service.Accept(f.ctx, f.tenant.ID(), inv.ID(), user)
+				require.ErrorIs(t, err, port.ErrNotFound)
+			}
+		})
 		// An address is the same recipient whatever its case: the invitation was
 		// sent to "recipient@…" (stored normalized) while the account holds "RECIPIENT@…".
-		t.Run("recipient case is ignored", func(t *testing.T) {
+		t.Run("recipient address is normalized", func(t *testing.T) {
 			f := newInvitationFixture(t, store)
 			inv := f.invite(t, true, "", nil, nil)
-			f.user.SetEmail(strings.ToUpper(f.user.Email()))
+			// Surrounding whitespace too: the bridge's exemption normalizes the
+			// address, so acceptance must not then refuse the same account.
+			f.user.SetEmail(" " + strings.ToUpper(f.user.Email()) + "\t")
 			require.NotEqual(t, *inv.InviteeEmail(), f.user.Email())
 			require.NoError(t, store.SaveUser(f.ctx, f.user))
 			pending, err := store.ListPendingInvitesForEmail(f.ctx, f.tenant.ID(), f.user.Email())

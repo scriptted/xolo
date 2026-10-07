@@ -26,8 +26,10 @@ type Options struct {
 
 	// AutoCreateUsers allows an identity unknown to Xolo to get an account on
 	// its first successful authentication. When false, only pre-provisioned
-	// identities can sign in — DefaultAdmins excepted, so a fresh instance can
-	// still be bootstrapped.
+	// identities can sign in, with three exceptions: DefaultAdmins, so a fresh
+	// instance can still be bootstrapped; applications, whose shadow user
+	// follows the application's lifecycle; and an address named by a pending
+	// targeted invitation, which stands for pre-provisioning.
 	AutoCreateUsers bool
 
 	// DefaultAdmins lists the e-mail addresses that are granted the platform
@@ -66,9 +68,10 @@ func Middleware(userStore port.UserStore, inviteStore port.InviteStore, emitter 
 				return
 			}
 
-			// Compared case-insensitively, like invitee addresses: an admin who
-			// writes Jean.Dupont@corp.tld while the provider returns
-			// jean.dupont@corp.tld must not be locked out of a fresh instance.
+			// Both sides normalized (case, surrounding whitespace), like invitee
+			// addresses: an admin who writes Jean.Dupont@corp.tld while the
+			// provider returns jean.dupont@corp.tld must not be locked out of a
+			// fresh instance.
 			isDefaultAdmin := model.NormalizeEmail(authnUser.Email) != "" && slices.ContainsFunc(opts.DefaultAdmins, func(email string) bool {
 				return model.NormalizeEmail(email) == model.NormalizeEmail(authnUser.Email)
 			})
@@ -92,8 +95,9 @@ func Middleware(userStore port.UserStore, inviteStore port.InviteStore, emitter 
 				// nothing about it. Default admins are the exception: they are
 				// the only way to bootstrap an instance that has no user yet.
 				//
-				// So is an identity holding a pending invitation, pre-provisioned
-				// by definition: an administrator named that address on purpose.
+				// So is an identity holding a pending targeted invitation,
+				// pre-provisioned by definition: an administrator named that
+				// address on purpose. An open invitation names nobody.
 				// The invitee cannot reach /join/{token} otherwise — this
 				// middleware runs before every route, so refusing here makes every
 				// invitation unusable as soon as AutoCreateUsers is off. Checked
@@ -193,11 +197,11 @@ func Middleware(userStore port.UserStore, inviteStore port.InviteStore, emitter 
 	}
 }
 
-// hasPendingInvite reports whether a still-acceptable invitation targets this
-// e-mail inside this tenant. A lookup failure is never fatal: it only means the
+// hasPendingInvite reports whether a still-acceptable targeted invitation names
+// this e-mail inside this tenant. A lookup failure is never fatal: it only means the
 // identity falls back to the configured provisioning policy.
 func hasPendingInvite(ctx context.Context, inviteStore port.InviteStore, tenantID model.TenantID, email string) bool {
-	if inviteStore == nil || email == "" {
+	if model.NormalizeEmail(email) == "" {
 		return false
 	}
 

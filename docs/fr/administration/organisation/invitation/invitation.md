@@ -42,7 +42,7 @@ Une invitation est un lien qui permet à un utilisateur de rejoindre votre organ
 
 ### Invitation ciblée
 
-Liez le convite à une adresse email. Seule la personne avec cet email pourra l'utiliser. La comparaison ignore la casse : peu importe que vous saisissiez `Jean.Dupont@corp.tld` là où le fournisseur d'identité renvoie `jean.dupont@corp.tld`.
+Liez l'invitation à une adresse email. Seule la personne avec cet email pourra l'utiliser. La comparaison ignore la casse et les espaces autour de l'adresse : peu importe que vous saisissiez `Jean.Dupont@corp.tld` là où le fournisseur d'identité renvoie `jean.dupont@corp.tld`. L'adresse est d'ailleurs enregistrée en minuscules.
 
 Le destinataire n'a pas besoin de posséder déjà un compte Xolo : une invitation ciblée en attente vaut pré-provisionnement, et le compte se crée à sa première connexion même lorsque `XOLO_HTTP_AUTHN_AUTO_CREATE_USERS` vaut `false`. Une invitation **ouverte** n'accorde pas cette dispense — elle ne nomme personne.
 
@@ -88,11 +88,14 @@ Pour chaque invitation, plusieurs actions sont disponibles :
 
 ## Acceptation et refus
 
-Une invitation est utilisable uniquement dans le tenant de son organisation,
-par un compte actif. Une invitation ciblée exige exactement l'adresse e-mail
-indiquée, y compris sa casse ; ses détails sont masqués avant connexion. Elle
-est à usage unique et disparaît après acceptation ou refus par son destinataire.
-Le refus d'un lien ouvert le masque localement pendant un jour sans le supprimer.
+Une invitation est utilisable uniquement dans le tenant de son organisation.
+Une invitation ciblée exige l'adresse e-mail indiquée, sans tenir compte de la
+casse ni des espaces qui l'entourent ; ses détails sont masqués avant connexion.
+Son destinataire peut l'accepter ou la refuser même si son compte est encore
+inactif (voir [Invitation ciblée](#invitation-ciblee)). Une invitation ouverte
+exige un compte actif. Une invitation ciblée est à usage unique et disparaît
+après acceptation ou refus par son destinataire. Le refus d'un lien ouvert le
+masque localement pendant un jour sans le supprimer.
 
 Un membre déjà présent conserve ses rôles et ne consomme pas d'utilisation.
 L'adhésion, l'attribution du rôle et la consommation du lien sont atomiques.

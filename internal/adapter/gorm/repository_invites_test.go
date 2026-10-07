@@ -46,6 +46,9 @@ func scenarioListPendingInvitesForEmail(t *testing.T, store *xologorm.Store) {
 
 	create(nil, nil) // open link, addressed to nobody
 
+	blank := " "
+	create(&blank, nil) // targeted, but to a blank address that names nobody
+
 	// Same addressee, but issued by an organization of another tenant.
 	otherTenant := model.TenantID("other-tenant")
 	foreignOrg := model.NewOrganization(otherTenant, "acme", "Acme Elsewhere", "")
@@ -77,7 +80,7 @@ func scenarioListPendingInvitesForEmail(t *testing.T, store *xologorm.Store) {
 		}
 	}
 
-	// Stored normalized, which is what keeps the invitee_email index usable.
+	// Stored normalized, so the lookup is a plain equality on the indexed column.
 	stored, err := store.GetInviteByID(ctx, targeted.ID())
 	if err != nil {
 		t.Fatalf("GetInviteByID: %v", err)
@@ -94,7 +97,8 @@ func scenarioListPendingInvitesForEmail(t *testing.T, store *xologorm.Store) {
 		t.Errorf("ListPendingInvitesForEmail (other tenant): got %d invites, want only %q", len(foreignInvites), foreign.ID())
 	}
 
-	for _, email := range []string{expiredEmail, revokedEmail, "nobody@corp.tld"} {
+	// An account without an address must not see the blank-targeted invitation.
+	for _, email := range []string{expiredEmail, revokedEmail, "nobody@corp.tld", "", "  "} {
 		invites, err := store.ListPendingInvitesForEmail(ctx, testTenantID, email)
 		if err != nil {
 			t.Fatalf("ListPendingInvitesForEmail(%q): %v", email, err)

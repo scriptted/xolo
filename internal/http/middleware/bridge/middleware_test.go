@@ -111,6 +111,22 @@ func (failingInviteStore) ListPendingInvitesForEmail(context.Context, model.Tena
 	return nil, errors.New("database unavailable")
 }
 
+// stubInviteStore answers every pending-invitation lookup with its invites.
+// Like failingInviteStore, any other call panics on the nil embedded store.
+type stubInviteStore struct {
+	port.InviteStore
+	invites []model.InviteToken
+}
+
+func (s stubInviteStore) ListPendingInvitesForEmail(context.Context, model.TenantID, string) ([]model.InviteToken, error) {
+	return s.invites, nil
+}
+
+// exhaustedInvite reports its single use as consumed.
+type exhaustedInvite struct{ model.InviteToken }
+
+func (exhaustedInvite) UsesCount() int { return 1 }
+
 // inviteEmail creates an organization in the given tenant and a pending
 // invitation targeting email.
 func inviteEmail(t *testing.T, store *xologorm.Store, tenantID model.TenantID, orgSlug, email string, expiresAt *time.Time) model.InviteToken {
@@ -316,8 +332,8 @@ func TestAutoCreateDisabled(t *testing.T) {
 		}
 	})
 
-	// The store filters on revocation and expiry only; an invitation whose uses
-	// are exhausted can no longer be accepted, so it provisions nothing.
+	// An invitation whose uses are exhausted can no longer be accepted, so it
+	// provisions nothing. The store already leaves it out of the lookup.
 	t.Run("ignores an exhausted invitation", func(t *testing.T) {
 		store := newStore(t)
 
@@ -338,6 +354,23 @@ func TestAutoCreateDisabled(t *testing.T) {
 
 		if result.served {
 			t.Error("the request should not have been served")
+		}
+	})
+
+	// The bridge does not rely on the store's filters alone: IsInviteValid
+	// rejects an exhausted invitation even if a lookup returns one.
+	t.Run("rechecks the validity of what the lookup returns", func(t *testing.T) {
+		store := newStore(t)
+
+		email, maxUses := "jean@corp.tld", 1
+		exhausted := exhaustedInvite{model.NewInviteToken(model.NewOrgID(), model.RoleMember, &email, nil, &maxUses, model.NewUserID())}
+		result := callWith(t, store, stubInviteStore{invites: []model.InviteToken{exhausted}}, disabled, newIdentity("sub-1", "jean@corp.tld", "Jean"))
+
+		if result.served {
+			t.Error("the request should not have been served")
+		}
+		if result.status != http.StatusForbidden {
+			t.Errorf("status: got %d, want %d", result.status, http.StatusForbidden)
 		}
 	})
 

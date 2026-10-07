@@ -195,7 +195,9 @@ func TestInvitationHTTPInactiveInvitee(t *testing.T) {
 	eachBackend(t, func(t *testing.T, store *xologorm.Store) {
 		f := newInvitationFixture(t, store)
 		handler := bridge.Middleware(store, store, nil, bridge.Options{AutoCreateUsers: false, ActiveByDefault: false})(invitationHTTPHandler(f))
-		identity := &authn.User{Provider: "test", Subject: "newcomer", Email: "Newcomer@Example.test", DisplayName: "Newcomer"}
+		// The claim differs from the invitation by case and stray whitespace:
+		// the bridge exemption and the invitation service must agree on it.
+		identity := &authn.User{Provider: "test", Subject: "newcomer", Email: " Newcomer@Example.test ", DisplayName: "Newcomer"}
 		request := func(method, path string) *httptest.ResponseRecorder {
 			r := httptest.NewRequest(method, path, nil)
 			ctx := authn.SetContextUser(httpCtx.SetTenant(r.Context(), f.tenant), identity)

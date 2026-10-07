@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/mail"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/xolo-gateway/xolo/internal/core/model"
@@ -87,8 +86,11 @@ func prepareInvitation(ctx context.Context, tx port.InvitationTx, tenantID model
 		if err != nil {
 			return nil, err
 		}
+		// Both sides normalized, like the bridge's exemption and the pending
+		// lookup: an address that earned the account must not then be refused.
+		// A blank target matches nobody, not even an account without an address.
 		email := invite.InviteeEmail()
-		if email != nil && !strings.EqualFold(*email, user.Email()) {
+		if email != nil && (model.NormalizeEmail(*email) == "" || model.NormalizeEmail(*email) != model.NormalizeEmail(user.Email())) {
 			return nil, port.ErrNotFound
 		}
 		// The recipient of a targeted invitation may act on it while inactive:

@@ -22,7 +22,14 @@ func TestUpgradeNormalizesInviteeEmails(t *testing.T) {
 		require.NoError(t, store.CreateOrg(t.Context(), org))
 
 		// Reconstruct the rows an earlier binary wrote, bypassing NewInviteToken.
-		want := map[string]*string{" Jean.Dupont@Corp.tld ": ptr("jean.dupont@corp.tld"), "  ": nil}
+		// The non-ASCII capital and the tab are what SQLite's LOWER() and TRIM()
+		// would leave alone: the stored form must equal model.NormalizeEmail.
+		want := map[string]*string{
+			" Jean.Dupont@Corp.tld ": ptr("jean.dupont@corp.tld"),
+			"\tÉlodie@Corp.tld":      ptr("élodie@corp.tld"),
+			// A blank target matches nobody; it must not become an open link.
+			"  ": ptr(""),
+		}
 		ids := map[string]model.InviteTokenID{}
 		for raw := range want {
 			invite := model.NewInviteToken(org.ID(), model.RoleMember, ptr("placeholder@corp.tld"), nil, nil, model.NewUserID())
